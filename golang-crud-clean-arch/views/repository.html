@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repository</title>
+</head>
+<body>
+    <h1>Halaman Repository</h1>
+    
+    <h2>Daftar Repo</h2>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Repo</th>
+                <th>Createdat</th>
+            </tr>
+        </thead>
+        <tbody id="repo-list">
+            <!-- Data user akan ditampilkan di sini -->
+        </tbody>
+    </table>
+
+    <script>
+        async function fetchRepo() {
+            try {
+                let response = await fetch('/repo');
+                let users = await response.json();
+                
+                let userTable = document.getElementById('repo-list');
+                userTable.innerHTML = ''; // Kosongkan isi sebelumnya
+                
+                users.forEach(repo => {
+                    let row = `
+                        <tr>
+                            <td>${repo.id}</td>
+                            <td>${repo.name}</td>
+                            <td>${repo.createdat}</td>
+                        </tr>
+                    `;
+                    userTable.innerHTML += row;
+                });
+            } catch (error) {
+                console.error("Error fetching repository:", error);
+            }
+        }
+
+        // Panggil fetchUsers saat halaman dimuat
+        window.onload = fetchRepo;
+    </script>
+</body>
+</html>
