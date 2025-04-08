@@ -1,0 +1,32 @@
+# Ignoring version control files
+.git
+.gitignore
+
+# Ignoring Go build and dependency files
+bin/
+pkg/
+vendor/
+*.exe
+*.out
+*.o
+*.a
+
+# Ignoring system files
+.DS_Store
+Thumbs.db
+
+# Ignoring environment and configuration files
+.env
+config/local.yaml
+config/*.local.yaml
+
+# Ignoring cache and temporary files
+node_modules/
+tmp/
+cache/
+logs/
+*.log
+
+# Ignoring Docker build files
+Dockerfile
+docker-compose.yml

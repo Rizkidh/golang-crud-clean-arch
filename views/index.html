@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard</title>
+  </head>
+  <body>
+    <h1>Halaman Dashboard</h1>
+
+    <h2>Tambah User</h2>
+    <form id="user-form">
+      <label for="name">Nama:</label>
+      <input type="text" id="name" required />
+      <label for="email">Email:</label>
+      <input type="email" id="email" required />
+      <button type="submit">Tambah</button>
+    </form>
+
+    <h2>Edit User</h2>
+    <form id="edit-user-form" style="display: none;">
+      <input type="hidden" id="edit-id" />
+      <label for="edit-name">Nama:</label>
+      <input type="text" id="edit-name" required />
+      <label for="edit-email">Email:</label>
+      <input type="email" id="edit-email" required />
+      <button type="submit">Update</button>
+      <button type="button" onclick="cancelEdit()">Batal</button>
+    </form>
+
+    <h2>Daftar Users</h2>
+    <table border="1">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Nama</th>
+          <th>Email</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody id="user-list">
+        <!-- Data user akan ditampilkan di sini -->
+      </tbody>
+    </table>
+
+    <script>
+      //FETCH USERS (SHOW USER)
+      async function fetchUsers() {
+        try {
+          let response = await fetch("/users");
+          let users = await response.json();
+
+          let userTable = document.getElementById("user-list");
+          userTable.innerHTML = "";
+          
+          //LOOPING UNTUK MENAMPILKAN DATA USER
+          users.forEach((user) => {
+            let row = document.createElement("tr");
+            row.innerHTML = `
+                        <td>${user.id}</td>
+                        <td>${user.name}</td>
+                        <td>${user.email}</td>
+                        <td>
+                            <button onclick="editUser(${user.id}, '${user.name}', '${user.email}')">Edit</button>
+                            <button onclick="deleteUser(${user.id})">Delete</button>
+                        </td>
+                    `;
+            userTable.appendChild(row);
+          });
+        } catch (error) {
+          console.error("Error fetching users:", error);
+        }
+      }
+
+      //DELETE USER
+      async function deleteUser(userId) {
+        if (confirm("Apakah Anda yakin ingin menghapus user ini?")) {
+          try {
+            let response = await fetch(`/users/${userId}`, {
+              method: "DELETE",
+            });
+
+            if (response.ok) {
+              alert("User berhasil dihapus");
+              fetchUsers();
+            } else {
+              alert("Gagal menghapus user");
+            }
+          } catch (error) {
+            console.error("Error deleting user:", error);
+          }
+        }
+      }
+
+      //EDIT USER (MENAMPILKAN DATA USER YANG AKAN DI EDIT)
+      function editUser(id, name, email) {
+        document.getElementById("edit-id").value = id;
+        document.getElementById("edit-name").value = name;
+        document.getElementById("edit-email").value = email;
+        document.getElementById("edit-user-form").style.display = "block";
+      }
+
+      //JIKA TOMBOL CANCEL DI KLIK MAKA TIDAK JALAN
+      function cancelEdit() {
+        document.getElementById("edit-user-form").style.display = "none";
+      }
+
+
+      async function updateUser(event) {
+        event.preventDefault();
+        let id = document.getElementById("edit-id").value;
+        let name = document.getElementById("edit-name").value;
+        let email = document.getElementById("edit-email").value;
+
+        let response = await fetch(`/users/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email }),
+        });
+
+        if (response.ok) {
+          alert("User berhasil diperbarui!");
+          document.getElementById("edit-user-form").reset();
+          document.getElementById("edit-user-form").style.display = "none";
+          fetchUsers();
+        } else {
+          let errorMessage = await response.text();
+          alert("Gagal memperbarui user: " + errorMessage);
+        }
+      }
+
+      document
+        .getElementById("user-form")
+        .addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          let name = document.getElementById("name").value;
+          let email = document.getElementById("email").value;
+
+          let response = await fetch("/create-user", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ name, email }),
+          });
+
+          if (response.ok) {
+            alert("User berhasil ditambahkan!");
+            document.getElementById("user-form").reset();
+            fetchUsers();
+          } else {
+            let errorMessage = await response.text();
+            alert("Gagal menambahkan user: " + errorMessage);
+          }
+        });
+
+      document.getElementById("edit-user-form").addEventListener("submit", updateUser);
+
+      window.onload = fetchUsers;
+    </script>
+  </body>
+</html>
