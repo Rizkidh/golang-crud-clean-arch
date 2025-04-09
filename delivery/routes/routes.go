@@ -6,31 +6,42 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Setup Repository Routes
-func SetupRepositoryRoutes(r *chi.Mux, repoHandler *http.RepositoryHandler) {
+// SetupRoutes initializes all application routes
+func SetupRoutes(
+	r *chi.Mux,
+	repoHandler *http.RepositoryHandler,
+	userHandler *http.UserHandler,
+	healthHandler *http.HealthHandler,
+) {
+}
+
+// SetupRepositoryRoutes configures repository-related routes
+func SetupRepositoryRoutes(r chi.Router, repoHandler *http.RepositoryHandler) {
 	r.Route("/repositories", func(r chi.Router) {
 		r.Post("/", repoHandler.Create)
 		r.Get("/", repoHandler.GetAll)
 		r.Get("/{id}", repoHandler.GetByID)
 		r.Put("/{id}", repoHandler.Update)
 		r.Delete("/{id}", repoHandler.Delete)
+
 	})
 }
 
-// Setup User Routes
-func SetupUserRoutes(r *chi.Mux, userHandler *http.UserHandler) {
+// SetupUserRoutes configures user-related routes
+func SetupUserRoutes(r chi.Router, h *http.UserHandler) {
 	r.Route("/users", func(r chi.Router) {
-		r.Post("/", userHandler.Create)
-		r.Get("/", userHandler.GetAll) // Get all users
-		r.Get("/{id}", userHandler.Get)
-		r.Put("/{id}", userHandler.Update)
-		r.Delete("/{id}", userHandler.Delete)
+		r.Post("/", h.CreateUser)
+		r.Get("/", h.GetAllUsers)
+		r.Get("/{id}", h.GetUser)
+		r.Put("/{id}", h.UpdateUser)
+		r.Delete("/{id}", h.DeleteUser)
 	})
 }
 
-// SetupHealthRoutes sets up the health check routes
-// for liveness and readiness probes.
-func SetupHealthRoutes(r chi.Router, handler *http.HealthHandler) {
-	r.Get("/health/liveness", handler.Liveness)
-	r.Get("/health/readiness", handler.Readiness)
+// SetupHealthRoutes configures health check routes
+func SetupHealthRoutes(r chi.Router, healthHandler *http.HealthHandler) {
+	r.Route("/health", func(r chi.Router) {
+		r.Get("/liveness", healthHandler.Liveness)
+		r.Get("/readiness", healthHandler.Readiness)
+	})
 }

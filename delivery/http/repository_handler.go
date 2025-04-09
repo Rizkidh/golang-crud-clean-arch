@@ -10,6 +10,7 @@ import (
 	"golang-crud-clean-arch/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -88,7 +89,12 @@ func (h *RepositoryHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = h.userUsecase.GetUser(ctx, id)
+	uuidID, err := uuid.FromBytes(id[:])
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid user ID format")
+		return
+	}
+	_, err = h.userUsecase.GetUser(ctx, uuidID.String())
 	if err != nil {
 		writeErrorResponse(w, http.StatusNotFound, "User not found")
 		return

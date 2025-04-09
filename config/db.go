@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -67,4 +68,34 @@ func MongoCollection(coll string) *mongo.Collection {
 
 func init() {
 	_ = godotenv.Load()
+}
+
+// POSTGRE SQL
+// ConnectPostgres connects to PostgreSQL database using the connection string from environment variables.
+func PostgresConnect() (*sql.DB, error) {
+	host := os.Getenv("PG_HOST")
+	port := os.Getenv("PG_PORT")
+	user := os.Getenv("PG_USER")
+	password := os.Getenv("PG_PASSWORD")
+	dbname := os.Getenv("PG_DB_NAME")
+	sslmode := os.Getenv("PG_SSL_MODE")
+
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, password, dbname, sslmode,
+	)
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		fmt.Println("Failed to connect to PostgreSQL:", err)
+		return nil, err
+	}
+
+	if err := db.Ping(); err != nil {
+		fmt.Println("PostgreSQL connection is not alive:", err)
+		return nil, err
+	}
+
+	fmt.Println("Successfully connected to PostgreSQL!")
+	return db, nil
 }

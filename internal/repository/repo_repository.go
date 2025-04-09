@@ -12,6 +12,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+type RepoRepositorySql interface {
+	Create(ctx context.Context, repo *entity.Repository) error
+	GetAllRepositories(ctx context.Context) ([]entity.Repository, error)
+	GetByID(ctx context.Context, id primitive.ObjectID) (*entity.Repository, error)
+	Update(ctx context.Context, repo *entity.Repository) error
+	Delete(ctx context.Context, id primitive.ObjectID) error
+}
+
 type RepoRepository struct {
 	db     *mongo.Client
 	redis  *redis.Client

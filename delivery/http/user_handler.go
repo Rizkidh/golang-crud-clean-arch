@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -9,110 +8,79 @@ import (
 	"golang-crud-clean-arch/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type UserHandler struct {
 	usecase *usecase.UserUsecase
 }
 
-func NewUserHandler(u *usecase.UserUsecase) *UserHandler {
-	return &UserHandler{u}
+func NewUserHandler(usecase *usecase.UserUsecase) *UserHandler {
+	return &UserHandler{usecase}
 }
 
-func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
+func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var user entity.User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
-	ctx := context.Background()
-	if err := h.usecase.CreateUser(ctx, &user); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := h.usecase.CreateUser(r.Context(), &user); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
 }
 
-func (h *UserHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
 
-	users, err := h.usecase.GetAllUsers(ctx)
+	user, err := h.usecase.GetUser(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var user entity.User
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	user.ID = id
+	if err := h.usecase.UpdateUser(r.Context(), &user); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	if err := h.usecase.DeleteUser(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UserHandler) GetAllUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := h.usecase.GetAllUsers(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(users)
-}
-
-func (h *UserHandler) Get(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := primitive.ObjectIDFromHex(idStr)
-	if err != nil {
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
-		return
-	}
-
-	ctx := context.Background()
-	user, err := h.usecase.GetUser(ctx, id)
-	if err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(user)
-}
-
-func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := primitive.ObjectIDFromHex(idStr)
-	if err != nil {
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
-		return
-	}
-
-	var updatedUser entity.User
-	if err := json.NewDecoder(r.Body).Decode(&updatedUser); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	updatedUser.ID = id
-	ctx := context.Background()
-	if err := h.usecase.UpdateUser(ctx, &updatedUser); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "User updated successfully"})
-}
-
-func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := primitive.ObjectIDFromHex(idStr)
-	if err != nil {
-		http.Error(w, "Invalid user ID format", http.StatusBadRequest)
-		return
-	}
-
-	ctx := context.Background()
-	if err := h.usecase.DeleteUser(ctx, id); err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "User deleted successfully"})
 }

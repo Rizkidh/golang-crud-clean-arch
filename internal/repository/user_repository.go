@@ -1,3 +1,4 @@
+// repository/user_repository_mongo.go
 package repository
 
 import (
@@ -15,32 +16,32 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-type UserRepository struct {
+type UserRepositoryMongo struct {
 	db       *mongo.Client
 	redis    *redis.Client
-	validate *validator.Validate
 	dbName   string
+	validate *validator.Validate
 }
 
-func NewUserRepository(db *mongo.Client, redis *redis.Client, dbName string) *UserRepository {
-	return &UserRepository{
+func NewUserRepositoryMongo(db *mongo.Client, redis *redis.Client, dbName string) *UserRepositoryMongo {
+	return &UserRepositoryMongo{
 		db:       db,
 		redis:    redis,
-		validate: validator.New(),
 		dbName:   dbName,
+		validate: validator.New(),
 	}
 }
 
-func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
+func (r *UserRepositoryMongo) Create(ctx context.Context, user *entity.User) error {
 	if err := r.validate.Struct(user); err != nil {
-		return errors.New("validasi gagal: " + err.Error())
+		return errors.New("validation failed: " + err.Error())
 	}
 
-	collection := r.db.Database(r.dbName).Collection("users")
 	user.ID = primitive.NewObjectID()
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
 
+	collection := r.db.Database(r.dbName).Collection("users")
 	_, err := collection.InsertOne(ctx, user)
 	if err == nil {
 		r.redis.Del(ctx, "users:all")
@@ -48,19 +49,33 @@ func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
 	return err
 }
 
-func (r *UserRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*entity.User, error) {
-	collection := r.db.Database(r.dbName).Collection("users")
+func (r *UserRepositoryMongo) GetByID(ctx context.Context, id interface{}) (*entity.User, error) {
+	var objectID primitive.ObjectID
+	switch v := id.(type) {
+	case string:
+		oid, err := primitive.ObjectIDFromHex(v)
+		if err != nil {
+			return nil, err
+		}
+		objectID = oid
+	case primitive.ObjectID:
+		objectID = v
+	default:
+		return nil, fmt.Errorf("invalid id type for MongoDB")
+	}
+
 	var user entity.User
-	err := collection.FindOne(ctx, bson.M{"_id": id}).Decode(&user)
+	collection := r.db.Database(r.dbName).Collection("users")
+	err := collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user)
 	if err != nil {
 		return nil, err
 	}
 	return &user, nil
 }
 
-func (r *UserRepository) Update(ctx context.Context, user *entity.User) error {
+func (r *UserRepositoryMongo) Update(ctx context.Context, user *entity.User) error {
 	if err := r.validate.Struct(user); err != nil {
-		return errors.New("validasi gagal: " + err.Error())
+		return errors.New("validation failed: " + err.Error())
 	}
 
 	collection := r.db.Database(r.dbName).Collection("users")
@@ -74,21 +89,37 @@ func (r *UserRepository) Update(ctx context.Context, user *entity.User) error {
 
 	result, err := collection.UpdateOne(ctx, bson.M{"_id": user.ID}, update)
 	if err == nil && result.MatchedCount > 0 {
-		r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", user.ID.Hex()))
+		if objectID, ok := user.ID.(primitive.ObjectID); ok {
+			r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", objectID.Hex()))
+		}
 	}
 	return err
 }
 
-func (r *UserRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+func (r *UserRepositoryMongo) Delete(ctx context.Context, id interface{}) error {
+	var objectID primitive.ObjectID
+	switch v := id.(type) {
+	case string:
+		oid, err := primitive.ObjectIDFromHex(v)
+		if err != nil {
+			return err
+		}
+		objectID = oid
+	case primitive.ObjectID:
+		objectID = v
+	default:
+		return fmt.Errorf("invalid id type for MongoDB")
+	}
+
 	collection := r.db.Database(r.dbName).Collection("users")
-	result, err := collection.DeleteOne(ctx, bson.M{"_id": id})
+	result, err := collection.DeleteOne(ctx, bson.M{"_id": objectID})
 	if err == nil && result.DeletedCount > 0 {
-		r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", id.Hex()))
+		r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", objectID.Hex()))
 	}
 	return err
 }
 
-func (r *UserRepository) GetAll(ctx context.Context) ([]entity.User, error) {
+func (r *UserRepositoryMongo) GetAll(ctx context.Context) ([]entity.User, error) {
 	collection := r.db.Database(r.dbName).Collection("users")
 	cursor, err := collection.Find(ctx, bson.M{})
 	if err != nil {

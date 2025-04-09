@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   app:
@@ -13,6 +13,20 @@ services:
     depends_on:
       - mongo
       - redis
+      - postgres  # ⬅️ Tambah dependensi ke PostgreSQL
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    container_name: golang-cleanarch-postgres
+    environment:
+      POSTGRES_DB: gotrial
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: kakashik1
+    ports:
+       - "5435:5432"
+    volumes:
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
     restart: unless-stopped
 
   mongo:
@@ -36,3 +50,4 @@ services:
 volumes:
   mongo_data:
   redis_data:
+  postgres_data:
