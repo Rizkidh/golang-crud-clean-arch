@@ -9,6 +9,7 @@ import (
 	"golang-crud-clean-arch/config"
 	httpHandler "golang-crud-clean-arch/delivery/http"
 	"golang-crud-clean-arch/delivery/routes"
+	"golang-crud-clean-arch/internal/event"
 	"golang-crud-clean-arch/internal/repository"
 	"golang-crud-clean-arch/internal/usecase"
 
@@ -24,10 +25,15 @@ func main() {
 		log.Println("No .env file found")
 	}
 
+	// Initialize Jaeger tracing
+	cleanup := config.InitTracer("golang-clean-arch")
+	defer cleanup()
+	fmt.Println("✅ Jaeger tracing initialized")
+
 	// Connect to PostgreSQL
 	postgresDB, err := config.PostgresConnect()
 	if err != nil {
-		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
+		log.Fatalf("❌ Failed to connect to PostgreSQL: %v", err)
 	}
 	defer postgresDB.Close()
 
@@ -38,36 +44,50 @@ func main() {
 	// Connect to Redis
 	redisClient := config.ConnectRedis()
 
+	// Initialize Kafka publishers
+	kafkaBrokers := []string{"localhost:9092"}
+	userPublisher := event.NewKafkaPublisher(kafkaBrokers, "user-events")
+	repoPublisher := event.NewKafkaPublisher(kafkaBrokers, "repository-events")
+
 	// --- Repositories ---
 	userRepoPostgres := repository.NewUserRepositoryPostgres(postgresDB, redisClient)
 	userRepoMongo := repository.NewUserRepositoryMongo(mongoClient, redisClient, mongoDBName)
 
+	repoRepoPostgres := repository.NewRepoRepositoryPostgres(postgresDB, redisClient)
+	repoRepoMongo := repository.NewRepoRepository(mongoClient, redisClient, mongoDBName)
+
 	// --- Usecases ---
-	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient)
-	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient)
+	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient, userPublisher)
+	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient, userPublisher)
+
+	repoUsecasePostgres := usecase.NewRepositoryUsecase(repoRepoPostgres, redisClient, repoPublisher)
+	repoUsecaseMongo := usecase.NewRepositoryUsecase(repoRepoMongo, redisClient, repoPublisher)
 
 	// --- Handlers ---
 	userHandlerPostgres := httpHandler.NewUserHandler(userUsecasePostgres)
 	userHandlerMongo := httpHandler.NewUserHandler(userUsecaseMongo)
 
+	repoHandlerPostgres := httpHandler.NewRepositoryHandler(repoUsecasePostgres)
+	repoHandlerMongo := httpHandler.NewRepositoryHandler(repoUsecaseMongo)
+
 	// --- Router ---
 	r := chi.NewRouter()
 
-	// Setup routes dengan prefix
 	r.Route("/pg", func(r chi.Router) {
 		routes.SetupUserRoutes(r, userHandlerPostgres)
+		routes.SetupRepositoryRoutes(r, repoHandlerPostgres)
 	})
 
 	r.Route("/mongo", func(r chi.Router) {
 		routes.SetupUserRoutes(r, userHandlerMongo)
+		routes.SetupRepositoryRoutes(r, repoHandlerMongo)
 	})
 
-	// Optional: tambahkan health check ke root
+	// Root health check
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("🚀 User Service is running!"))
+		w.Write([]byte("🚀 API is running on /pg/* and /mongo/*"))
 	})
 
-	// Jalankan server
-	fmt.Println("Server berjalan di port :9000")
+	fmt.Println("🌍 Server berjalan di port :9000")
 	log.Fatal(http.ListenAndServe(":9000", r))
 }

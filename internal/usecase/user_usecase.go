@@ -2,12 +2,18 @@ package usecase
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"log"
+	"time"
+
 	"golang-crud-clean-arch/internal/entity"
+	"golang-crud-clean-arch/internal/event"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/sony/gobreaker"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type UserRepository interface {
@@ -19,56 +25,164 @@ type UserRepository interface {
 }
 
 type UserUsecase struct {
-	repo  UserRepository
-	redis *redis.Client
+	repo      UserRepository
+	redis     *redis.Client
+	cb        *gobreaker.CircuitBreaker
+	tracer    trace.Tracer
+	publisher event.EventPublisher
 }
 
-func NewUserUsecase(repo UserRepository, redis *redis.Client) *UserUsecase {
-	return &UserUsecase{repo, redis}
+func NewUserUsecase(repo UserRepository, redis *redis.Client, publisher event.EventPublisher) *UserUsecase {
+	cbSettings := gobreaker.Settings{
+		Name:        "UserGetAllBreaker",
+		MaxRequests: 1,
+		Interval:    60 * time.Second,
+		Timeout:     10 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 3
+		},
+	}
+
+	return &UserUsecase{
+		repo:      repo,
+		redis:     redis,
+		cb:        gobreaker.NewCircuitBreaker(cbSettings),
+		tracer:    otel.Tracer("user-usecase"),
+		publisher: publisher,
+	}
 }
 
 func (u *UserUsecase) CreateUser(ctx context.Context, user *entity.User) error {
+	ctx, span := u.tracer.Start(ctx, "CreateUser")
+	defer span.End()
+
 	if err := user.Validate(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Validation failed")
 		return err
 	}
-	return u.repo.Create(ctx, user)
+
+	err := u.repo.Create(ctx, user)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Create failed")
+		return err
+	}
+
+	// Publish event to Kafka
+	eventData := entity.Event{
+		Type: "user.created",
+		Data: user,
+	}
+	if err := u.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: user.created")
+		span.SetStatus(codes.Ok, "User created & event published")
+	}
+
+	return nil
 }
 
-func (u *UserUsecase) GetUser(ctx context.Context, idStr string) (*entity.User, error) {
-	// Coba parse ke UUID (PostgreSQL)
-	if uuidID, err := uuid.Parse(idStr); err == nil {
-		return u.repo.GetByID(ctx, uuidID)
+func (u *UserUsecase) GetUser(ctx context.Context, id interface{}) (*entity.User, error) {
+	ctx, span := u.tracer.Start(ctx, "GetUser")
+	defer span.End()
+
+	user, err := u.repo.GetByID(ctx, id)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Get failed")
+		return nil, err
 	}
 
-	// Coba parse ke ObjectID (MongoDB)
-	if objectID, err := primitive.ObjectIDFromHex(idStr); err == nil {
-		return u.repo.GetByID(ctx, objectID)
-	}
-
-	return nil, errors.New("invalid ID format")
+	span.SetStatus(codes.Ok, "User fetched")
+	return user, nil
 }
 
 func (u *UserUsecase) UpdateUser(ctx context.Context, user *entity.User) error {
+	ctx, span := u.tracer.Start(ctx, "UpdateUser")
+	defer span.End()
+
 	if err := user.Validate(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Validation failed")
 		return err
 	}
-	return u.repo.Update(ctx, user)
+
+	err := u.repo.Update(ctx, user)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Update failed")
+		return err
+	}
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "user.updated",
+		Data: user,
+	}
+	if err := u.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: user.updated")
+		span.SetStatus(codes.Ok, "User updated & event published")
+	}
+
+	return nil
 }
 
-func (u *UserUsecase) DeleteUser(ctx context.Context, idStr string) error {
-	// UUID
-	if uuidID, err := uuid.Parse(idStr); err == nil {
-		return u.repo.Delete(ctx, uuidID)
+func (u *UserUsecase) DeleteUser(ctx context.Context, id interface{}) error {
+	ctx, span := u.tracer.Start(ctx, "DeleteUser")
+	defer span.End()
+
+	err := u.repo.Delete(ctx, id)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Delete failed")
+		return err
 	}
 
-	// ObjectID
-	if objectID, err := primitive.ObjectIDFromHex(idStr); err == nil {
-		return u.repo.Delete(ctx, objectID)
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "user.deleted",
+		Data: map[string]interface{}{"id": id},
+	}
+	if err := u.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: user.deleted")
+		span.SetStatus(codes.Ok, "User deleted & event published")
 	}
 
-	return errors.New("invalid ID format")
+	return nil
 }
 
 func (u *UserUsecase) GetAllUsers(ctx context.Context) ([]entity.User, error) {
-	return u.repo.GetAll(ctx)
+	ctx, span := u.tracer.Start(ctx, "GetAllUsers")
+	defer span.End()
+
+	result, err := u.cb.Execute(func() (interface{}, error) {
+		return u.repo.GetAll(ctx)
+	})
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Circuit Breaker triggered")
+		return nil, fmt.Errorf("user service unavailable: %w", err)
+	}
+
+	users, ok := result.([]entity.User)
+	if !ok {
+		span.SetStatus(codes.Error, "Type assertion failed")
+		return nil, fmt.Errorf("user service: type assertion failed")
+	}
+
+	span.SetStatus(codes.Ok, "Users fetched")
+	return users, nil
 }

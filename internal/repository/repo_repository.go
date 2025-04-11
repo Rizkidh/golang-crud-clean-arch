@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"golang-crud-clean-arch/internal/entity"
@@ -12,14 +13,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-type RepoRepositorySql interface {
-	Create(ctx context.Context, repo *entity.Repository) error
-	GetAllRepositories(ctx context.Context) ([]entity.Repository, error)
-	GetByID(ctx context.Context, id primitive.ObjectID) (*entity.Repository, error)
-	Update(ctx context.Context, repo *entity.Repository) error
-	Delete(ctx context.Context, id primitive.ObjectID) error
-}
-
 type RepoRepository struct {
 	db     *mongo.Client
 	redis  *redis.Client
@@ -27,16 +20,15 @@ type RepoRepository struct {
 }
 
 func NewRepoRepository(db *mongo.Client, redis *redis.Client, dbName string) *RepoRepository {
-	return &RepoRepository{
-		db:     db,
-		redis:  redis,
-		dbName: dbName,
-	}
+	return &RepoRepository{db, redis, dbName}
 }
 
 func (r *RepoRepository) Create(ctx context.Context, repo *entity.Repository) error {
 	collection := r.db.Database(r.dbName).Collection("repo")
-	repo.ID = primitive.NewObjectID()
+
+	id := primitive.NewObjectID()
+	repo.ID = id
+
 	_, err := collection.InsertOne(ctx, repo)
 	if err == nil {
 		r.redis.Del(ctx, "repositories:all")
@@ -59,10 +51,15 @@ func (r *RepoRepository) GetAllRepositories(ctx context.Context) ([]entity.Repos
 	return repos, nil
 }
 
-func (r *RepoRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*entity.Repository, error) {
+func (r *RepoRepository) GetByID(ctx context.Context, id interface{}) (*entity.Repository, error) {
+	objectID, ok := id.(primitive.ObjectID)
+	if !ok {
+		return nil, errors.New("invalid ID format, expected ObjectID")
+	}
+
 	collection := r.db.Database(r.dbName).Collection("repo")
 	var repo entity.Repository
-	err := collection.FindOne(ctx, bson.M{"_id": id}).Decode(&repo)
+	err := collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&repo)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +67,11 @@ func (r *RepoRepository) GetByID(ctx context.Context, id primitive.ObjectID) (*e
 }
 
 func (r *RepoRepository) Update(ctx context.Context, repo *entity.Repository) error {
+	objectID, ok := repo.ID.(primitive.ObjectID)
+	if !ok {
+		return errors.New("invalid ID type (expected ObjectID)")
+	}
+
 	collection := r.db.Database(r.dbName).Collection("repo")
 	update := bson.M{
 		"$set": bson.M{
@@ -79,18 +81,23 @@ func (r *RepoRepository) Update(ctx context.Context, repo *entity.Repository) er
 			"user_id":    repo.UserID,
 		},
 	}
-	result, err := collection.UpdateOne(ctx, bson.M{"_id": repo.ID}, update)
+	result, err := collection.UpdateOne(ctx, bson.M{"_id": objectID}, update)
 	if err == nil && result.MatchedCount > 0 {
-		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", repo.ID.Hex()))
+		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", objectID.Hex()))
 	}
 	return err
 }
 
-func (r *RepoRepository) Delete(ctx context.Context, id primitive.ObjectID) error {
+func (r *RepoRepository) Delete(ctx context.Context, id interface{}) error {
+	objectID, ok := id.(primitive.ObjectID)
+	if !ok {
+		return errors.New("invalid ID type for Delete (expected ObjectID)")
+	}
+
 	collection := r.db.Database(r.dbName).Collection("repo")
-	result, err := collection.DeleteOne(ctx, bson.M{"_id": id})
+	result, err := collection.DeleteOne(ctx, bson.M{"_id": objectID})
 	if err == nil && result.DeletedCount > 0 {
-		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", id.Hex()))
+		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", objectID.Hex()))
 	}
 	return err
 }

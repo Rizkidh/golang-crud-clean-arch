@@ -2,102 +2,133 @@ package usecase
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"golang-crud-clean-arch/internal/entity"
-	"golang-crud-clean-arch/internal/repository"
+	"golang-crud-clean-arch/internal/event"
 
 	"github.com/go-redis/redis/v8"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/sony/gobreaker"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
-type RepositoryUsecase struct {
-	repoRepo *repository.RepoRepository
-	redis    *redis.Client
+type RepoRepository interface {
+	Create(ctx context.Context, repo *entity.Repository) error
+	GetByID(ctx context.Context, id interface{}) (*entity.Repository, error)
+	Update(ctx context.Context, repo *entity.Repository) error
+	Delete(ctx context.Context, id interface{}) error
+	GetAllRepositories(ctx context.Context) ([]entity.Repository, error)
 }
 
-func NewRepositoryUsecase(repoRepo *repository.RepoRepository, redis *redis.Client) *RepositoryUsecase {
-	return &RepositoryUsecase{repoRepo: repoRepo, redis: redis}
+type RepositoryUsecase struct {
+	repo      RepoRepository
+	redis     *redis.Client
+	cb        *gobreaker.CircuitBreaker
+	tracer    trace.Tracer
+	publisher event.EventPublisher
+}
+
+func NewRepositoryUsecase(repo RepoRepository, redis *redis.Client, publisher event.EventPublisher) *RepositoryUsecase {
+	cbSettings := gobreaker.Settings{
+		Name:        "RepoGetAllBreaker",
+		MaxRequests: 1,
+		Interval:    60 * time.Second,
+		Timeout:     10 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 3
+		},
+	}
+	return &RepositoryUsecase{
+		repo:      repo,
+		redis:     redis,
+		cb:        gobreaker.NewCircuitBreaker(cbSettings),
+		tracer:    otel.Tracer("repository-usecase"),
+		publisher: publisher,
+	}
 }
 
 func (u *RepositoryUsecase) CreateRepository(ctx context.Context, repo *entity.Repository) error {
+	ctx, span := u.tracer.Start(ctx, "CreateRepository")
+	defer span.End()
+
 	if err := repo.Validate(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Validation failed")
 		return err
 	}
-	repo.ID = primitive.NewObjectID()
-	repo.CreatedAt = time.Now()
-	repo.UpdatedAt = time.Now()
-	if err := u.repoRepo.Create(ctx, repo); err != nil {
-		return err
+
+	err := u.repo.Create(ctx, repo)
+	if err == nil {
+		_ = u.publisher.Publish(ctx, "repository-events", "repo.created", repo)
 	}
-	u.redis.Del(ctx, "repositories:all")
-	return nil
+	return err
 }
 
-func (u *RepositoryUsecase) GetAllRepositories(ctx context.Context) ([]entity.Repository, error) {
-	cacheKey := "repositories:all"
-	cachedData, err := u.redis.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var repos []entity.Repository
-		if err := json.Unmarshal([]byte(cachedData), &repos); err == nil {
-			fmt.Println("Mengambil data dari cache Redis")
-			return repos, nil
-		}
-	}
+func (u *RepositoryUsecase) GetRepository(ctx context.Context, id interface{}) (*entity.Repository, error) {
+	ctx, span := u.tracer.Start(ctx, "GetRepository")
+	defer span.End()
 
-	repos, err := u.repoRepo.GetAllRepositories(ctx)
+	repo, err := u.repo.GetByID(ctx, id)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Not found")
 		return nil, err
 	}
 
-	jsonData, _ := json.Marshal(repos)
-	u.redis.Set(ctx, cacheKey, jsonData, 10*time.Minute)
-	fmt.Println("Mengambil data dari database dan menyimpannya ke Redis")
-
-	return repos, nil
-}
-
-func (u *RepositoryUsecase) GetRepository(ctx context.Context, id primitive.ObjectID) (*entity.Repository, error) {
-	cacheKey := fmt.Sprintf("repositories:%s", id.Hex())
-	cachedData, err := u.redis.Get(ctx, cacheKey).Result()
-	if err == nil {
-		var repo entity.Repository
-		if err := json.Unmarshal([]byte(cachedData), &repo); err == nil {
-			fmt.Println("Mengambil repository dari cache Redis")
-			return &repo, nil
-		}
-	}
-
-	repo, err := u.repoRepo.GetByID(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	jsonData, _ := json.Marshal(repo)
-	u.redis.Set(ctx, cacheKey, jsonData, 10*time.Minute)
-	fmt.Println("Mengambil repository dari database dan menyimpannya ke Redis")
-
+	span.SetStatus(codes.Ok, "Repository fetched")
 	return repo, nil
 }
 
 func (u *RepositoryUsecase) UpdateRepository(ctx context.Context, repo *entity.Repository) error {
+	ctx, span := u.tracer.Start(ctx, "UpdateRepository")
+	defer span.End()
+
 	if err := repo.Validate(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Validation failed")
 		return err
 	}
-	repo.UpdatedAt = time.Now()
-	if err := u.repoRepo.Update(ctx, repo); err != nil {
-		return err
+
+	err := u.repo.Update(ctx, repo)
+	if err == nil {
+		_ = u.publisher.Publish(ctx, "repository-events", "repo.updated", repo)
 	}
-	u.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", repo.ID.Hex()))
-	return nil
+	return err
 }
 
-func (u *RepositoryUsecase) DeleteRepository(ctx context.Context, id primitive.ObjectID) error {
-	if err := u.repoRepo.Delete(ctx, id); err != nil {
-		return err
+func (u *RepositoryUsecase) DeleteRepository(ctx context.Context, id interface{}) error {
+	ctx, span := u.tracer.Start(ctx, "DeleteRepository")
+	defer span.End()
+
+	err := u.repo.Delete(ctx, id)
+	if err == nil {
+		_ = u.publisher.Publish(ctx, "repository-events", "repo.deleted", map[string]interface{}{"id": id})
 	}
-	u.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%s", id.Hex()))
-	return nil
+	return err
+}
+
+func (u *RepositoryUsecase) GetAllRepositories(ctx context.Context) ([]entity.Repository, error) {
+	ctx, span := u.tracer.Start(ctx, "GetAllRepositories")
+	defer span.End()
+
+	result, err := u.cb.Execute(func() (interface{}, error) {
+		return u.repo.GetAllRepositories(ctx)
+	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Circuit breaker triggered")
+		return nil, fmt.Errorf("repository service unavailable: %w", err)
+	}
+
+	repos, ok := result.([]entity.Repository)
+	if !ok {
+		span.SetStatus(codes.Error, "Type assertion failed")
+		return nil, fmt.Errorf("repository service: type assertion failed")
+	}
+
+	span.SetStatus(codes.Ok, "Repositories retrieved")
+	return repos, nil
 }
