@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"golang-crud-clean-arch/config"
 	httpHandler "golang-crud-clean-arch/delivery/http"
@@ -45,9 +46,11 @@ func main() {
 	redisClient := config.ConnectRedis()
 
 	// Initialize Kafka publishers
-	kafkaBrokers := []string{"localhost:9092"}
-	userPublisher := event.NewKafkaPublisher(kafkaBrokers, "user-events")
-	repoPublisher := event.NewKafkaPublisher(kafkaBrokers, "repository-events")
+	kafkaBrokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
+	publisherusers := event.NewKafkaPublisher(kafkaBrokers, "user-events")
+	publisherrepos := event.NewKafkaPublisher(kafkaBrokers, "repo-events")
+	defer publisherusers.Close()
+	fmt.Println("✅ Kafka publisher initialized")
 
 	// --- Repositories ---
 	userRepoPostgres := repository.NewUserRepositoryPostgres(postgresDB, redisClient)
@@ -57,11 +60,11 @@ func main() {
 	repoRepoMongo := repository.NewRepoRepository(mongoClient, redisClient, mongoDBName)
 
 	// --- Usecases ---
-	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient, userPublisher)
-	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient, userPublisher)
+	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient, publisherusers)
+	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient, publisherusers)
 
-	repoUsecasePostgres := usecase.NewRepositoryUsecase(repoRepoPostgres, redisClient, repoPublisher)
-	repoUsecaseMongo := usecase.NewRepositoryUsecase(repoRepoMongo, redisClient, repoPublisher)
+	repoUsecasePostgres := usecase.NewRepositoryUsecase(repoRepoPostgres, redisClient, publisherrepos)
+	repoUsecaseMongo := usecase.NewRepositoryUsecase(repoRepoMongo, redisClient, publisherrepos)
 
 	// --- Handlers ---
 	userHandlerPostgres := httpHandler.NewUserHandler(userUsecasePostgres)
