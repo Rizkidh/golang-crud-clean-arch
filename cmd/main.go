@@ -15,65 +15,62 @@ import (
 	"golang-crud-clean-arch/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/joho/godotenv"
-
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.opentelemetry.io/otel"
 )
 
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
-	}
-
-	// Initialize Jaeger tracing
-	cleanup := config.InitTracer("golang-clean-arch")
+	// ✅ Inisialisasi Jaeger Tracer
+	cleanup, tracerProvider := config.InitTracerWithProvider("golang-clean-arch")
 	defer cleanup()
-	fmt.Println("✅ Jaeger tracing initialized")
+	otel.SetTracerProvider(tracerProvider)
 
-	// Connect to PostgreSQL
+	// PostgreSQL
 	postgresDB, err := config.PostgresConnect()
 	if err != nil {
 		log.Fatalf("❌ Failed to connect to PostgreSQL: %v", err)
 	}
 	defer postgresDB.Close()
 
-	// Connect to MongoDB
+	// MongoDB
 	mongoClient := config.MongoConnect()
 	mongoDBName := os.Getenv("MONGO_DB_NAME")
 
-	// Connect to Redis
+	// Redis
 	redisClient := config.ConnectRedis()
 
-	// Initialize Kafka publishers
+	// Kafka
 	kafkaBrokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
-	publisherusers := event.NewKafkaPublisher(kafkaBrokers, "user-events")
-	publisherrepos := event.NewKafkaPublisher(kafkaBrokers, "repo-events")
-	defer publisherusers.Close()
+	kafkaAddr := kafkaBrokers[0]
+
+	publisherUsers := event.NewKafkaPublisher(kafkaBrokers, "user-events")
+	publisherRepos := event.NewKafkaPublisher(kafkaBrokers, "repo-events")
+	defer publisherUsers.Close()
+	defer publisherRepos.Close()
 	fmt.Println("✅ Kafka publisher initialized")
 
-	// --- Repositories ---
+	// Repositories
 	userRepoPostgres := repository.NewUserRepositoryPostgres(postgresDB, redisClient)
 	userRepoMongo := repository.NewUserRepositoryMongo(mongoClient, redisClient, mongoDBName)
-
 	repoRepoPostgres := repository.NewRepoRepositoryPostgres(postgresDB, redisClient)
 	repoRepoMongo := repository.NewRepoRepository(mongoClient, redisClient, mongoDBName)
 
-	// --- Usecases ---
-	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient, publisherusers)
-	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient, publisherusers)
+	// Usecases
+	userUsecasePostgres := usecase.NewUserUsecase(userRepoPostgres, redisClient, publisherUsers)
+	userUsecaseMongo := usecase.NewUserUsecase(userRepoMongo, redisClient, publisherUsers)
+	repoUsecasePostgres := usecase.NewRepositoryUsecase(repoRepoPostgres, redisClient, publisherRepos)
+	repoUsecaseMongo := usecase.NewRepositoryUsecase(repoRepoMongo, redisClient, publisherRepos)
 
-	repoUsecasePostgres := usecase.NewRepositoryUsecase(repoRepoPostgres, redisClient, publisherrepos)
-	repoUsecaseMongo := usecase.NewRepositoryUsecase(repoRepoMongo, redisClient, publisherrepos)
-
-	// --- Handlers ---
+	// Handlers
 	userHandlerPostgres := httpHandler.NewUserHandler(userUsecasePostgres)
 	userHandlerMongo := httpHandler.NewUserHandler(userUsecaseMongo)
-
 	repoHandlerPostgres := httpHandler.NewRepositoryHandler(repoUsecasePostgres)
 	repoHandlerMongo := httpHandler.NewRepositoryHandler(repoUsecaseMongo)
 
-	// --- Router ---
+	// ✅ Health Handler with Jaeger tracer info
+	healthHandler := httpHandler.NewHealthHandler(mongoClient, redisClient, postgresDB, kafkaAddr, tracerProvider)
+
+	// Router
 	r := chi.NewRouter()
 
 	r.Route("/pg", func(r chi.Router) {
@@ -86,7 +83,9 @@ func main() {
 		routes.SetupRepositoryRoutes(r, repoHandlerMongo)
 	})
 
-	// Root health check
+	// Healthcheck
+	routes.SetupHealthRoutes(r, healthHandler)
+
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("🚀 API is running on /pg/* and /mongo/*"))
 	})

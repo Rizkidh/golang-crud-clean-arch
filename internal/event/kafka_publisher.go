@@ -21,7 +21,9 @@ func NewKafkaPublisher(brokers []string, topic string) *KafkaPublisher {
 	// Check and create topic
 	err := createKafkaTopic(brokers[0], topic)
 	if err != nil {
-		fmt.Printf("⚠️ Failed to create Kafka topic '%s': %v\n", topic, err)
+		fmt.Printf("Error creating topic %s: %v\n", topic, err)
+	} else {
+		fmt.Printf("✅ Topic %s created successfully\n", topic)
 	}
 
 	return &KafkaPublisher{

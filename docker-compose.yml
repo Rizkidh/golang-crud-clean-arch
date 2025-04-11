@@ -9,11 +9,22 @@ services:
     env_file:
       - .env
     depends_on:
-      - mongo
-      - redis
-      - postgres
-      - kafka
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   postgres:
     image: postgres:15
@@ -28,6 +39,13 @@ services:
       - ./dbmigration/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
       - ./dbmigration/seed_data.sql:/docker-entrypoint-initdb.d/seed_data.sql
     restart: unless-stopped
+    logging:
+      driver: "none"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mongo:
     image: mongo:6.0
@@ -37,6 +55,15 @@ services:
     volumes:
       - mongo_data:/data/db
     restart: unless-stopped
+    logging:
+      driver: "none"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
 
   redis:
     image: redis:7-alpine
@@ -46,14 +73,28 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    logging:
+      driver: "none"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   jaeger:
     image: jaegertracing/all-in-one:1.51
     container_name: golang-cleanarch-jaeger
     ports:
-      - "16686:16686"   # UI http://localhost:16686
-      - "14268:14268"   # Collector (for traces)
+      - "16686:16686"
+      - "14268:14268"
     restart: unless-stopped
+    logging:
+      driver: "none"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:16686"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   zookeeper:
     image: bitnami/zookeeper:3.8
@@ -63,6 +104,8 @@ services:
     environment:
       ALLOW_ANONYMOUS_LOGIN: "yes"
     restart: unless-stopped
+    logging:
+      driver: "none"
 
   kafka:
     image: bitnami/kafka:3.5
@@ -78,17 +121,26 @@ services:
     depends_on:
       - zookeeper
     restart: unless-stopped
+    logging:
+      driver: "none"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   kafdrop:
     image: obsidiandynamics/kafdrop
     container_name: golang-cleanarch-kafdrop
     ports:
-      - "9001:9000"  # Akses UI di http://localhost:9001
+      - "9001:9000"
     environment:
       KAFKA_BROKERCONNECT: kafka:9092
     depends_on:
       - kafka
     restart: unless-stopped
+    logging:
+      driver: "none"
 
 volumes:
   mongo_data:

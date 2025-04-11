@@ -6,7 +6,6 @@ import (
 	httpHandler "golang-crud-clean-arch/delivery/http"
 
 	"github.com/go-chi/chi/v5"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // SetupRoutes initializes all application routes
@@ -24,29 +23,29 @@ func SetupRoutes(
 // SetupRepositoryRoutes configures repository-related routes
 func SetupRepositoryRoutes(r chi.Router, h *httpHandler.RepositoryHandler) {
 	r.Route("/repositories", func(r chi.Router) {
-		r.Method("POST", "/", otelhttp.NewHandler(http.HandlerFunc(h.Create), "CreateRepository"))
-		r.Method("GET", "/", otelhttp.NewHandler(http.HandlerFunc(h.GetAll), "GetAllRepositories"))
-		r.Method("GET", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.Get), "GetRepository"))
-		r.Method("PUT", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.Update), "UpdateRepository"))
-		r.Method("DELETE", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.Delete), "DeleteRepository"))
+		r.Post("/", http.HandlerFunc(h.Create))
+		r.Get("/", http.HandlerFunc(h.GetAll))
+		r.Get("/{id}", http.HandlerFunc(h.Get))
+		r.Put("/{id}", http.HandlerFunc(h.Update))
+		r.Delete("/{id}", http.HandlerFunc(h.Delete))
 	})
 }
 
 // SetupUserRoutes configures user-related routes
 func SetupUserRoutes(r chi.Router, h *httpHandler.UserHandler) {
 	r.Route("/users", func(r chi.Router) {
-		r.Method("POST", "/", otelhttp.NewHandler(http.HandlerFunc(h.CreateUser), "CreateUser"))
-		r.Method("GET", "/", otelhttp.NewHandler(http.HandlerFunc(h.GetAllUsers), "GetAllUsers"))
-		r.Method("GET", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.GetUser), "GetUser"))
-		r.Method("PUT", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.UpdateUser), "UpdateUser"))
-		r.Method("DELETE", "/{id}", otelhttp.NewHandler(http.HandlerFunc(h.DeleteUser), "DeleteUser"))
+		r.Post("/", http.HandlerFunc(h.CreateUser))
+		r.Get("/", http.HandlerFunc(h.GetAllUsers))
+		r.Get("/{id}", http.HandlerFunc(h.GetUser))
+		r.Put("/{id}", http.HandlerFunc(h.UpdateUser))
+		r.Delete("/{id}", http.HandlerFunc(h.DeleteUser))
 	})
 }
 
 // SetupHealthRoutes configures health check routes
 func SetupHealthRoutes(r chi.Router, h *httpHandler.HealthHandler) {
 	r.Route("/health", func(r chi.Router) {
-		r.Method("GET", "/liveness", otelhttp.NewHandler(http.HandlerFunc(h.Liveness), "Liveness"))
-		r.Method("GET", "/readiness", otelhttp.NewHandler(http.HandlerFunc(h.Readiness), "Readiness"))
+		r.Get("/liveness", http.HandlerFunc(h.Liveness))
+		r.Get("/readiness", http.HandlerFunc(h.Readiness))
 	})
 }
