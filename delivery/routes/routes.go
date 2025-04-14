@@ -34,6 +34,7 @@ func SetupRepositoryRoutes(r chi.Router, h *httpHandler.RepositoryHandler) {
 // SetupUserRoutes configures user-related routes
 func SetupUserRoutes(r chi.Router, h *httpHandler.UserHandler) {
 	r.Route("/users", func(r chi.Router) {
+		r.Get("/test-cb", http.HandlerFunc(h.TestCircuitBreaker)) // 🧪 Test CB (tanpa double `/users`)
 		r.Post("/", http.HandlerFunc(h.CreateUser))
 		r.Get("/", http.HandlerFunc(h.GetAllUsers))
 		r.Get("/{id}", http.HandlerFunc(h.GetUser))

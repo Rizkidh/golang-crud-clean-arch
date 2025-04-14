@@ -13,38 +13,56 @@ import (
 	"github.com/google/uuid"
 )
 
+// RepoRepositoryPostgres adalah struct untuk meng-handle operasi data repository ke PostgreSQL dan Redis
 type RepoRepositoryPostgres struct {
 	db    *sql.DB
 	redis *redis.Client
 }
 
+// NewRepoRepositoryPostgres membuat instance baru dari RepoRepositoryPostgres
 func NewRepoRepositoryPostgres(db *sql.DB, redis *redis.Client) *RepoRepositoryPostgres {
 	return &RepoRepositoryPostgres{db: db, redis: redis}
 }
 
+// Helper: parse interface{} ke uuid.UUID
+func parseUserIDAsUUID(raw interface{}) (uuid.UUID, error) {
+	switch v := raw.(type) {
+	case string:
+		return uuid.Parse(v)
+	case uuid.UUID:
+		return v, nil
+	default:
+		return uuid.Nil, errors.New("invalid user_id type (must be string or uuid.UUID)")
+	}
+}
+
+// Create menambahkan data repository baru ke PostgreSQL
 func (r *RepoRepositoryPostgres) Create(ctx context.Context, repo *entity.Repository) error {
 	id := uuid.New()
 	repo.ID = id
 	repo.CreatedAt = time.Now()
 	repo.UpdatedAt = time.Now()
 
-	userID, ok := repo.UserID.(uuid.UUID)
-	if !ok {
-		return errors.New("invalid UserID type (expected uuid.UUID)")
+	// Konversi UserID ke uuid.UUID
+	userID, err := parseUserIDAsUUID(repo.UserID)
+	if err != nil {
+		return fmt.Errorf("UserID parse error: %w", err)
 	}
 
 	query := `INSERT INTO repositories (id, user_id, name, url, ai_enabled, created_at, updated_at)
 			  VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
-	_, err := r.db.ExecContext(ctx, query,
+	_, err = r.db.ExecContext(ctx, query,
 		id, userID, repo.Name, repo.URL, repo.AIEnabled, repo.CreatedAt, repo.UpdatedAt,
 	)
 	if err == nil {
 		r.redis.Del(ctx, "repositories:all")
+		fmt.Println("✅ Repository created successfully.")
 	}
 	return err
 }
 
+// GetAllRepositories mengambil semua repository dari PostgreSQL
 func (r *RepoRepositoryPostgres) GetAllRepositories(ctx context.Context) ([]entity.Repository, error) {
 	query := `SELECT id, user_id, name, url, ai_enabled, created_at, updated_at FROM repositories`
 	rows, err := r.db.QueryContext(ctx, query)
@@ -67,9 +85,11 @@ func (r *RepoRepositoryPostgres) GetAllRepositories(ctx context.Context) ([]enti
 		repo.UserID = userID
 		repos = append(repos, repo)
 	}
+	fmt.Println("✅ Repositories retrieved successfully.")
 	return repos, nil
 }
 
+// GetByID mengambil repository berdasarkan ID dari PostgreSQL
 func (r *RepoRepositoryPostgres) GetByID(ctx context.Context, id interface{}) (*entity.Repository, error) {
 	var uuidID uuid.UUID
 	switch v := id.(type) {
@@ -99,9 +119,11 @@ func (r *RepoRepositoryPostgres) GetByID(ctx context.Context, id interface{}) (*
 
 	repo.ID = uuidID
 	repo.UserID = userID
+	fmt.Println("✅ Repository retrieved successfully.")
 	return &repo, nil
 }
 
+// Update memperbarui data repository di PostgreSQL
 func (r *RepoRepositoryPostgres) Update(ctx context.Context, repo *entity.Repository) error {
 	uuidID, ok := repo.ID.(uuid.UUID)
 	if !ok {
@@ -116,10 +138,12 @@ func (r *RepoRepositoryPostgres) Update(ctx context.Context, repo *entity.Reposi
 
 	if err == nil {
 		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%v", uuidID))
+		fmt.Println("✅ Repository updated successfully.")
 	}
 	return err
 }
 
+// Delete menghapus data repository dari PostgreSQL berdasarkan ID
 func (r *RepoRepositoryPostgres) Delete(ctx context.Context, id interface{}) error {
 	var uuidID uuid.UUID
 	switch v := id.(type) {
@@ -144,6 +168,7 @@ func (r *RepoRepositoryPostgres) Delete(ctx context.Context, id interface{}) err
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected > 0 {
 		r.redis.Del(ctx, "repositories:all", fmt.Sprintf("repositories:%v", uuidID))
+		fmt.Println("✅ Repository deleted successfully.")
 	}
 	return nil
 }

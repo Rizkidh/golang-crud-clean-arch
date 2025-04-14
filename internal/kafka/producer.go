@@ -2,34 +2,19 @@
 package kafka
 
 import (
-	"context"
-	"log"
-	"time"
-
-	"github.com/segmentio/kafka-go"
+	"golang-crud-clean-arch/internal/event"
 )
 
-var kafkaWriter *kafka.Writer
+var kafkaEventPublisher event.EventPublisher // Global instance untuk publisher Kafka
 
-func InitKafkaWriter(broker, topic string) {
-	kafkaWriter = &kafka.Writer{
-		Addr:         kafka.TCP(broker),
-		Topic:        topic,
-		Balancer:     &kafka.LeastBytes{},
-		RequiredAcks: kafka.RequireAll,
-	}
-	log.Println("Kafka writer initialized")
+// InitKafkaPublisher menginisialisasi Kafka publisher dengan broker dan topik default.
+// Fungsi ini bisa dipanggil saat aplikasi start (misalnya di main.go).
+func InitKafkaPublisher(brokers []string, topic string) {
+	kafkaEventPublisher = event.NewKafkaPublisher(brokers, topic)
 }
 
-func PublishMessage(ctx context.Context, key, message string) error {
-	if kafkaWriter == nil {
-		return nil
-	}
-	msg := kafka.Message{
-		Key:   []byte(key),
-		Value: []byte(message),
-		Time:  time.Now(),
-	}
-	log.Printf("Publishing message to Kafka: %s\n", msg.Value)
-	return kafkaWriter.WriteMessages(ctx, msg)
+// GetKafkaPublisher mengembalikan instance global dari Kafka publisher.
+// Digunakan oleh komponen lain (misalnya usecase) untuk publish event.
+func GetKafkaPublisher() event.EventPublisher {
+	return kafkaEventPublisher
 }

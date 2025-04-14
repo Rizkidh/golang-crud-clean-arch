@@ -1,3 +1,4 @@
+// internal/usecase/user_usecase.go
 package usecase
 
 import (
@@ -16,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Interface untuk UserRepository, mendukung berbagai jenis database (PostgreSQL, MongoDB, dll)
 type UserRepository interface {
 	Create(ctx context.Context, user *entity.User) error
 	GetByID(ctx context.Context, id interface{}) (*entity.User, error)
@@ -24,6 +26,7 @@ type UserRepository interface {
 	GetAll(ctx context.Context) ([]entity.User, error)
 }
 
+// UserUsecase adalah struct utama untuk semua logika bisnis terkait user
 type UserUsecase struct {
 	repo      UserRepository
 	redis     *redis.Client
@@ -32,6 +35,7 @@ type UserUsecase struct {
 	publisher event.EventPublisher
 }
 
+// NewUserUsecase membuat instance baru UserUsecase lengkap dengan circuit breaker & tracer
 func NewUserUsecase(repo UserRepository, redis *redis.Client, publisher event.EventPublisher) *UserUsecase {
 	cbSettings := gobreaker.Settings{
 		Name:        "UserGetAllBreaker",
@@ -52,6 +56,7 @@ func NewUserUsecase(repo UserRepository, redis *redis.Client, publisher event.Ev
 	}
 }
 
+// CreateUser menyimpan user baru ke database dan mem-publish event ke Kafka
 func (u *UserUsecase) CreateUser(ctx context.Context, user *entity.User) error {
 	ctx, span := u.tracer.Start(ctx, "CreateUser")
 	defer span.End()
@@ -69,7 +74,7 @@ func (u *UserUsecase) CreateUser(ctx context.Context, user *entity.User) error {
 		return err
 	}
 
-	// Publish event to Kafka
+	// Publish event ke Kafka
 	eventData := entity.Event{
 		Type: "user.created",
 		Data: user,
@@ -86,6 +91,7 @@ func (u *UserUsecase) CreateUser(ctx context.Context, user *entity.User) error {
 	return nil
 }
 
+// GetUser mengambil user berdasarkan ID dari repository
 func (u *UserUsecase) GetUser(ctx context.Context, id interface{}) (*entity.User, error) {
 	ctx, span := u.tracer.Start(ctx, "GetUser")
 	defer span.End()
@@ -101,6 +107,7 @@ func (u *UserUsecase) GetUser(ctx context.Context, id interface{}) (*entity.User
 	return user, nil
 }
 
+// UpdateUser mengupdate data user di database dan publish event ke Kafka
 func (u *UserUsecase) UpdateUser(ctx context.Context, user *entity.User) error {
 	ctx, span := u.tracer.Start(ctx, "UpdateUser")
 	defer span.End()
@@ -135,6 +142,7 @@ func (u *UserUsecase) UpdateUser(ctx context.Context, user *entity.User) error {
 	return nil
 }
 
+// DeleteUser menghapus user dari database dan publish event ke Kafka
 func (u *UserUsecase) DeleteUser(ctx context.Context, id interface{}) error {
 	ctx, span := u.tracer.Start(ctx, "DeleteUser")
 	defer span.End()
@@ -163,6 +171,7 @@ func (u *UserUsecase) DeleteUser(ctx context.Context, id interface{}) error {
 	return nil
 }
 
+// GetAllUsers mengambil semua user dengan circuit breaker untuk menangani kegagalan
 func (u *UserUsecase) GetAllUsers(ctx context.Context) ([]entity.User, error) {
 	ctx, span := u.tracer.Start(ctx, "GetAllUsers")
 	defer span.End()

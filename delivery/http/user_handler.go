@@ -2,7 +2,9 @@ package http
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"time"
 
 	"golang-crud-clean-arch/internal/entity"
 	"golang-crud-clean-arch/internal/usecase"
@@ -83,4 +85,23 @@ func (h *UserHandler) GetAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(users)
+}
+
+// TEST CIRCUIT BREAKER
+func (h *UserHandler) TestCircuitBreaker(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Simulasikan error secara manual
+	for i := 1; i <= 5; i++ {
+		_, err := h.usecase.GetAllUsers(ctx)
+		if err != nil {
+			log.Printf("❌ Attempt %d failed: %v\n", i, err)
+		} else {
+			log.Printf("✅ Attempt %d succeeded\n", i)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Test circuit breaker complete. Check logs."))
 }

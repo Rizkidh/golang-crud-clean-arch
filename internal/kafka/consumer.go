@@ -1,3 +1,4 @@
+// internal/kafka/consumer.go
 package kafka
 
 import (
@@ -9,43 +10,45 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// KafkaConsumer represents a consumer listening to a specific topic.
+// KafkaConsumer merupakan struktur yang menangani konsumsi pesan dari Kafka.
 type KafkaConsumer struct {
-	Brokers []string
-	Topic   string
-	GroupID string
-	Handler func(message kafka.Message)
+	Brokers []string                    // Daftar broker Kafka
+	Topic   string                      // Nama topik Kafka
+	GroupID string                      // ID grup consumer
+	Handler func(message kafka.Message) // Fungsi handler untuk memproses pesan yang diterima
 }
 
-// Start starts the Kafka consumer and processes messages using the provided handler.
+// Start menjalankan Kafka consumer dan membaca pesan dari topik secara kontinu.
 func (kc *KafkaConsumer) Start(ctx context.Context) error {
+	// Konfigurasi reader Kafka
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:           kc.Brokers,
-		GroupID:           kc.GroupID,
-		Topic:             kc.Topic,
-		MinBytes:          10e3, // 10KB
-		MaxBytes:          10e6, // 10MB
-		CommitInterval:    time.Second,
-		HeartbeatInterval: 3 * time.Second,
+		Brokers:           kc.Brokers,      // Daftar broker
+		GroupID:           kc.GroupID,      // ID group (untuk shared consumer)
+		Topic:             kc.Topic,        // Nama topik yang dikonsumsi
+		MinBytes:          10e3,            // Minimum ukuran pesan (10KB)
+		MaxBytes:          10e6,            // Maksimum ukuran pesan (10MB)
+		CommitInterval:    time.Second,     // Interval commit offset
+		HeartbeatInterval: 3 * time.Second, // Interval heartbeat untuk Kafka group
 	})
 	defer r.Close()
 
 	log.Printf("✅ Kafka consumer started for topic '%s' [group: %s]", kc.Topic, kc.GroupID)
 
 	for {
+		// Baca pesan dari Kafka
 		m, err := r.ReadMessage(ctx)
 		if err != nil {
 			log.Printf("❌ Error reading message: %v", err)
 			return err
 		}
 
-		// Handle the message
+		// Jalankan handler untuk memproses pesan secara async
 		go kc.Handler(m)
 	}
 }
 
-// Example handler usage
+// PrintMessageHandler adalah contoh handler default untuk mencetak isi pesan ke konsol.
 func PrintMessageHandler(msg kafka.Message) {
-	fmt.Printf("📥 Received message on topic '%s': key=%s value=%s\n",
+	fmt.Printf("📥 Received message on topic '%s':\n🔑 Key: %s\n📦 Value: %s\n\n",
 		msg.Topic, string(msg.Key), string(msg.Value))
 }
