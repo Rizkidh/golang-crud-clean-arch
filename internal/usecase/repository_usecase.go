@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"golang-crud-clean-arch/internal/entity"
@@ -61,10 +62,27 @@ func (u *RepositoryUsecase) CreateRepository(ctx context.Context, repo *entity.R
 	}
 
 	err := u.repo.Create(ctx, repo)
-	if err == nil {
-		_ = u.publisher.Publish(ctx, "repository-events", "repo.created", repo)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Create failed")
+		return err
 	}
-	return err
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "repo.created",
+		Data: repo,
+	}
+	if err := u.publisher.Publish(ctx, "repo-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: repo.created")
+		span.SetStatus(codes.Ok, "Repository created & event published")
+	}
+
+	return nil
 }
 
 func (u *RepositoryUsecase) GetRepository(ctx context.Context, id interface{}) (*entity.Repository, error) {
@@ -93,10 +111,27 @@ func (u *RepositoryUsecase) UpdateRepository(ctx context.Context, repo *entity.R
 	}
 
 	err := u.repo.Update(ctx, repo)
-	if err == nil {
-		_ = u.publisher.Publish(ctx, "repository-events", "repo.updated", repo)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Update failed")
+		return err
 	}
-	return err
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "repo.updated",
+		Data: repo,
+	}
+	if err := u.publisher.Publish(ctx, "repo-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: repo.updated")
+		span.SetStatus(codes.Ok, "Repository updated & event published")
+	}
+
+	return nil
 }
 
 func (u *RepositoryUsecase) DeleteRepository(ctx context.Context, id interface{}) error {
@@ -104,19 +139,39 @@ func (u *RepositoryUsecase) DeleteRepository(ctx context.Context, id interface{}
 	defer span.End()
 
 	err := u.repo.Delete(ctx, id)
-	if err == nil {
-		_ = u.publisher.Publish(ctx, "repository-events", "repo.deleted", map[string]interface{}{"id": id})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Delete failed")
+		return err
 	}
-	return err
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "repo.deleted",
+		Data: map[string]interface{}{"id": id},
+	}
+	if err := u.publisher.Publish(ctx, "repo-events", eventData.Type, eventData.Data); err != nil {
+		log.Printf("❌ Failed to publish Kafka event: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Kafka publish failed")
+	} else {
+		log.Println("✅ Kafka event published: repo.deleted")
+		span.SetStatus(codes.Ok, "Repository deleted & event published")
+	}
+
+	return nil
 }
 
 func (u *RepositoryUsecase) GetAllRepositories(ctx context.Context) ([]entity.Repository, error) {
 	ctx, span := u.tracer.Start(ctx, "GetAllRepositories")
 	defer span.End()
 
+	span.SetAttributes()
+
 	result, err := u.cb.Execute(func() (interface{}, error) {
 		return u.repo.GetAllRepositories(ctx)
 	})
+
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "Circuit breaker triggered")
@@ -129,6 +184,6 @@ func (u *RepositoryUsecase) GetAllRepositories(ctx context.Context) ([]entity.Re
 		return nil, fmt.Errorf("repository service: type assertion failed")
 	}
 
-	span.SetStatus(codes.Ok, "Repositories retrieved")
+	span.SetStatus(codes.Ok, "Repositories fetched")
 	return repos, nil
 }

@@ -11,7 +11,6 @@ import (
 )
 
 // KafkaPublisher adalah struct untuk publish event ke Kafka.
-// Menyimpan writer per topik agar efisien dan thread-safe.
 type KafkaPublisher struct {
 	brokers []string                 // Daftar alamat broker Kafka
 	writers map[string]*kafka.Writer // Map writer Kafka berdasarkan topik
@@ -20,14 +19,6 @@ type KafkaPublisher struct {
 
 // NewKafkaPublisher menginisialisasi KafkaPublisher dan membuat topik jika belum ada.
 func NewKafkaPublisher(brokers []string, topic string) *KafkaPublisher {
-	// Buat topik jika belum ada
-	err := createKafkaTopic(brokers[0], topic)
-	if err != nil {
-		fmt.Printf("❌ Error creating topic %s: %v\n", topic, err)
-	} else {
-		fmt.Printf("✅ Topic %s created successfully\n", topic)
-	}
-
 	return &KafkaPublisher{
 		brokers: brokers,
 		writers: map[string]*kafka.Writer{
@@ -91,34 +82,4 @@ func (p *KafkaPublisher) Close() error {
 		}
 	}
 	return firstErr
-}
-
-// createKafkaTopic membuat topik Kafka jika belum ada di broker.
-func createKafkaTopic(broker, topic string) error {
-	// Koneksi awal ke broker Kafka
-	conn, err := kafka.Dial("tcp", broker)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	// Dapatkan informasi controller Kafka
-	controller, err := conn.Controller()
-	if err != nil {
-		return err
-	}
-
-	// Koneksi langsung ke controller Kafka
-	ctrlConn, err := kafka.Dial("tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
-	if err != nil {
-		return err
-	}
-	defer ctrlConn.Close()
-
-	// Coba buat topik
-	return ctrlConn.CreateTopics(kafka.TopicConfig{
-		Topic:             topic,
-		NumPartitions:     1,
-		ReplicationFactor: 1,
-	})
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -77,7 +78,7 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Jaeger (based on tracer presence)
-	jaegerURL := "http://jaeger:14268/api/traces"
+	jaegerURL := os.Getenv("JAEGER_ENDPOINT")
 	req, _ := http.NewRequestWithContext(ctx, "POST", jaegerURL, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode >= 400 {

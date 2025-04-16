@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang-crud-clean-arch/internal/entity"
+	"golang-crud-clean-arch/internal/event"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
@@ -16,17 +17,18 @@ import (
 
 // UserRepositoryPostgres adalah struct untuk meng-handle operasi data user ke PostgreSQL dan Redis
 type UserRepositoryPostgres struct {
-	db       *sql.DB             // koneksi ke database PostgreSQL
-	redis    *redis.Client       // koneksi ke Redis
-	validate *validator.Validate // validasi data dengan go-playground/validator
+	db        *sql.DB              // koneksi ke database PostgreSQL
+	redis     *redis.Client        // koneksi ke Redis
+	validate  *validator.Validate  // validasi data dengan go-playground/validator
+	publisher event.EventPublisher // publisher untuk mempublikasikan event
 }
 
-// NewUserRepositoryPostgres membuat instance baru dari UserRepositoryPostgres
-func NewUserRepositoryPostgres(db *sql.DB, redis *redis.Client) *UserRepositoryPostgres {
+func NewUserRepositoryPostgres(db *sql.DB, redis *redis.Client, publisher event.EventPublisher) *UserRepositoryPostgres {
 	return &UserRepositoryPostgres{
-		db:       db,
-		redis:    redis,
-		validate: validator.New(),
+		db:        db,
+		redis:     redis,
+		validate:  validator.New(),
+		publisher: publisher,
 	}
 }
 
@@ -159,4 +161,20 @@ func (r *UserRepositoryPostgres) GetAll(ctx context.Context) ([]entity.User, err
 	}
 	fmt.Println("✅ All users retrieved successfully.")
 	return users, nil
+}
+
+func (r *UserRepositoryPostgres) PublishEvent(ctx context.Context, eventType string, eventData interface{}) error {
+	// Buat event berdasarkan tipe dan data yang diterima
+	event := entity.Event{
+		Type: eventType,
+		Data: eventData,
+	}
+
+	// Publikasikan event ke Kafka atau broker event lainnya
+	if err := r.publisher.Publish(ctx, "user-events", event.Type, event.Data); err != nil {
+		// Jika ada kesalahan saat mempublikasikan event, kembalikan error
+		return fmt.Errorf("failed to publish event: %v", err)
+	}
+
+	return nil
 }

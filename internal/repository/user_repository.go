@@ -7,91 +7,134 @@ import (
 	"time"
 
 	"golang-crud-clean-arch/internal/entity"
+	"golang-crud-clean-arch/internal/event"
+	"golang-crud-clean-arch/internal/notification"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
-// UserRepositoryMongo adalah implementasi repository untuk MongoDB
 type UserRepositoryMongo struct {
-	db       *mongo.Client       // koneksi MongoDB
-	redis    *redis.Client       // koneksi Redis untuk cache
-	dbName   string              // nama database MongoDB
-	validate *validator.Validate // validator untuk validasi struct
+	db        *mongo.Client
+	redis     *redis.Client
+	dbName    string
+	validate  *validator.Validate
+	tracer    trace.Tracer
+	publisher event.EventPublisher
 }
 
-// NewUserRepositoryMongo membuat instance baru dari UserRepositoryMongo
-func NewUserRepositoryMongo(db *mongo.Client, redis *redis.Client, dbName string) *UserRepositoryMongo {
+func NewUserRepositoryMongo(db *mongo.Client, redis *redis.Client, dbName string, publisher event.EventPublisher) *UserRepositoryMongo {
 	return &UserRepositoryMongo{
-		db:       db,
-		redis:    redis,
-		dbName:   dbName,
-		validate: validator.New(),
+		db:        db,
+		redis:     redis,
+		dbName:    dbName,
+		validate:  validator.New(),
+		tracer:    otel.Tracer("user-repository-mongo"),
+		publisher: publisher,
 	}
 }
 
-// Create menyimpan user baru ke MongoDB
 func (r *UserRepositoryMongo) Create(ctx context.Context, user *entity.User) error {
-	// Validasi struct user
+	ctx, span := r.tracer.Start(ctx, "UserRepositoryMongo.Create")
+	defer span.End()
+
 	if err := r.validate.Struct(user); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "validation failed")
 		return errors.New("validation failed: " + err.Error())
 	}
 
-	// Set ID dan waktu
 	user.ID = primitive.NewObjectID()
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
 
-	// Simpan ke koleksi MongoDB
+	span.SetAttributes(
+		attribute.String("user.id", user.ID.(primitive.ObjectID).Hex()),
+		attribute.String("user.email", user.Email),
+	)
+
 	collection := r.db.Database(r.dbName).Collection("users")
 	_, err := collection.InsertOne(ctx, user)
-	if err == nil {
-		// Hapus cache agar data tidak stale
-		r.redis.Del(ctx, "users:all")
-		fmt.Println("✅ User created successfully.")
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "insert failed")
+		return err
 	}
-	return err
+
+	r.redis.Del(ctx, "users:all")
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "user.created",
+		Data: user,
+	}
+	if err := r.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		return err
+	}
+	notification.SendTelegramMessage("✅ User created: " + user.Email)
+	return nil
 }
 
-// GetByID mengambil user berdasarkan ID
 func (r *UserRepositoryMongo) GetByID(ctx context.Context, id interface{}) (*entity.User, error) {
-	var objectID primitive.ObjectID
+	ctx, span := r.tracer.Start(ctx, "UserRepositoryMongo.GetByID")
+	defer span.End()
 
-	// Konversi ID ke ObjectID
+	var objectID primitive.ObjectID
 	switch v := id.(type) {
 	case string:
 		oid, err := primitive.ObjectIDFromHex(v)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid ID format")
 			return nil, err
 		}
 		objectID = oid
 	case primitive.ObjectID:
 		objectID = v
 	default:
-		return nil, fmt.Errorf("invalid id type for MongoDB")
+		err := fmt.Errorf("invalid id type for MongoDB")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid ID type")
+		return nil, err
 	}
 
-	// Query ke MongoDB
+	span.SetAttributes(attribute.String("user.id", objectID.Hex()))
+
 	var user entity.User
 	collection := r.db.Database(r.dbName).Collection("users")
 	err := collection.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "user not found")
 		return nil, err
 	}
 
-	fmt.Println("✅ User retrieved successfully.")
+	span.SetAttributes(attribute.String("user.email", user.Email))
+	span.SetStatus(codes.Ok, "user fetched")
 	return &user, nil
 }
 
-// Update memperbarui data user di MongoDB
 func (r *UserRepositoryMongo) Update(ctx context.Context, user *entity.User) error {
-	// Validasi data sebelum update
+	ctx, span := r.tracer.Start(ctx, "UserRepositoryMongo.Update")
+	defer span.End()
+
 	if err := r.validate.Struct(user); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "validation failed")
 		return errors.New("validation failed: " + err.Error())
 	}
+
+	span.SetAttributes(
+		attribute.String("user.id", user.ID.(primitive.ObjectID).Hex()),
+		attribute.String("user.email", user.Email),
+	)
 
 	collection := r.db.Database(r.dbName).Collection("users")
 	update := bson.M{
@@ -102,68 +145,125 @@ func (r *UserRepositoryMongo) Update(ctx context.Context, user *entity.User) err
 		},
 	}
 
-	// Jalankan update
 	result, err := collection.UpdateOne(ctx, bson.M{"_id": user.ID}, update)
-	if err == nil && result.MatchedCount > 0 {
-		// Jika berhasil, hapus cache terkait
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update failed")
+		return err
+	}
+
+	if result.MatchedCount > 0 {
 		if objectID, ok := user.ID.(primitive.ObjectID); ok {
 			r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", objectID.Hex()))
 		}
-		fmt.Println("✅ User updated successfully.")
 	}
-	return err
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "user.updated",
+		Data: user,
+	}
+	if err := r.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "event publish failed")
+		return err
+	}
+
+	span.SetAttributes(attribute.Int64("matched_count", result.MatchedCount))
+	span.SetStatus(codes.Ok, "user updated")
+	return nil
 }
 
-// Delete menghapus user berdasarkan ID
 func (r *UserRepositoryMongo) Delete(ctx context.Context, id interface{}) error {
-	var objectID primitive.ObjectID
+	ctx, span := r.tracer.Start(ctx, "UserRepositoryMongo.Delete")
+	defer span.End()
 
-	// Konversi ID ke ObjectID
+	var objectID primitive.ObjectID
 	switch v := id.(type) {
 	case string:
 		oid, err := primitive.ObjectIDFromHex(v)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid ID format")
 			return err
 		}
 		objectID = oid
 	case primitive.ObjectID:
 		objectID = v
 	default:
-		return fmt.Errorf("invalid id type for MongoDB")
+		err := fmt.Errorf("invalid id type for MongoDB")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "invalid ID type")
+		return err
 	}
 
-	// Jalankan delete di MongoDB
+	span.SetAttributes(attribute.String("user.id", objectID.Hex()))
+
 	collection := r.db.Database(r.dbName).Collection("users")
 	result, err := collection.DeleteOne(ctx, bson.M{"_id": objectID})
-	if err == nil && result.DeletedCount > 0 {
-		// Jika berhasil, hapus cache
-		r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", objectID.Hex()))
-		fmt.Println("✅ User deleted successfully.")
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "delete failed")
+		return err
 	}
-	return err
+
+	if result.DeletedCount > 0 {
+		r.redis.Del(ctx, "users:all", fmt.Sprintf("users:%s", objectID.Hex()))
+	}
+
+	// Publish Kafka event
+	eventData := entity.Event{
+		Type: "user.deleted",
+		Data: map[string]interface{}{"id": objectID.Hex()},
+	}
+	if err := r.publisher.Publish(ctx, "user-events", eventData.Type, eventData.Data); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "event publish failed")
+		return err
+	}
+
+	span.SetAttributes(attribute.Int64("deleted_count", result.DeletedCount))
+	span.SetStatus(codes.Ok, "user deleted")
+	return nil
 }
 
-// GetAll mengambil semua data user dari MongoDB
 func (r *UserRepositoryMongo) GetAll(ctx context.Context) ([]entity.User, error) {
-	collection := r.db.Database(r.dbName).Collection("users")
+	ctx, span := r.tracer.Start(ctx, "UserRepositoryMongo.GetAll")
+	defer span.End()
 
-	// Ambil semua data user
+	collection := r.db.Database(r.dbName).Collection("users")
 	cursor, err := collection.Find(ctx, bson.M{})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find failed")
 		return nil, err
 	}
 	defer cursor.Close(ctx)
 
 	var users []entity.User
 	if err = cursor.All(ctx, &users); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "decode failed")
 		return nil, err
 	}
 
-	fmt.Println("✅ All users retrieved successfully.")
+	span.SetAttributes(attribute.Int("user.count", len(users)))
+	span.SetStatus(codes.Ok, "all users fetched")
 	return users, nil
 }
 
-// Simulated failure for circuit breaker test
-//func (r *UserRepositoryMongo) GetAll(ctx context.Context) ([]entity.User, error) {
-//	return nil, fmt.Errorf("simulated db failure for circuit breaker test")
-//}
+func (r *UserRepositoryMongo) PublishEvent(ctx context.Context, eventType string, eventData interface{}) error {
+	// Buat event berdasarkan tipe dan data yang diterima
+	event := entity.Event{
+		Type: eventType,
+		Data: eventData,
+	}
+
+	// Publikasikan event ke Kafka atau broker event lainnya
+	if err := r.publisher.Publish(ctx, "user-events", event.Type, event.Data); err != nil {
+		// Jika ada kesalahan saat mempublikasikan event, kembalikan error
+		return fmt.Errorf("failed to publish event: %v", err)
+	}
+
+	return nil
+}
